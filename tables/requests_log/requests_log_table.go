@@ -1,4 +1,4 @@
-package audit_log
+package requests_log
 
 import (
 	"time"
@@ -27,7 +27,7 @@ func (c *RequestsLogTable) Identifier() string {
 
 func (c *RequestsLogTable) GetSourceMetadata() ([]*table.SourceMetadata[*RequestsLog], error) {
 	defaultArtifactConfig := &artifact_source_config.ArtifactSourceConfigImpl{
-		FileLayout: utils.ToStringPointer("projects/%{DATA:project_id}/logs/requests"),
+		FileLayout: utils.ToStringPointer("requests/%{YEAR:year}/%{MONTHNUM:month}/%{MONTHDAY:day}/%{HOUR:hour}:%{MINUTE:minute}:%{SECOND:second}_%{DATA:end_time}_%{DATA:suffix}.json"),
 	}
 
 	return []*table.SourceMetadata[*RequestsLog]{
@@ -62,31 +62,14 @@ func (c *RequestsLogTable) EnrichRow(row *RequestsLog, sourceEnrichmentFields sc
 	row.TpIndex = schema.DefaultIndex
 	row.TpDate = row.Timestamp.Truncate(24 * time.Hour)
 
-	if row.AuthenticationInfo != nil {
-		if row.AuthenticationInfo.PrincipalEmail != "" {
-			row.TpUsernames = append(row.TpUsernames, row.AuthenticationInfo.PrincipalEmail)
-			row.TpEmails = append(row.TpEmails, row.AuthenticationInfo.PrincipalEmail)
-		}
-		if row.AuthenticationInfo.PrincipalSubject != "" {
-			row.TpUsernames = append(row.TpUsernames, row.AuthenticationInfo.PrincipalSubject)
-		}
-	}
-
 	if row.HttpRequest != nil {
-		if row.HttpRequest.LocalIp != "" {
-			row.TpIps = append(row.TpIps, row.HttpRequest.LocalIp)
-			row.TpSourceIP = &row.HttpRequest.LocalIp
-		}
 		if row.HttpRequest.RemoteIp != "" {
 			row.TpIps = append(row.TpIps, row.HttpRequest.RemoteIp)
 			row.TpDestinationIP = &row.HttpRequest.RemoteIp
 		}
-	}
-
-	if row.RequestMetadata != nil {
-		if row.RequestMetadata.CallerIp != "" {
-			row.TpIps = append(row.TpIps, row.RequestMetadata.CallerIp)
-			row.TpSourceIP = &row.RequestMetadata.CallerIp
+		if row.HttpRequest.ServerIp != "" {
+			row.TpIps = append(row.TpIps, row.HttpRequest.ServerIp)
+			row.TpSourceIP = &row.HttpRequest.ServerIp
 		}
 	}
 
