@@ -59,7 +59,7 @@ func (c *RequestsLogTable) EnrichRow(row *RequestsLog, sourceEnrichmentFields sc
 	row.TpID = xid.New().String()
 	row.TpTimestamp = row.Timestamp
 	row.TpIngestTimestamp = time.Now()
-	row.TpIndex = schema.DefaultIndex
+	// row.TpIndex = schema.DefaultIndex
 	row.TpDate = row.Timestamp.Truncate(24 * time.Hour)
 
 	if row.HttpRequest != nil {
