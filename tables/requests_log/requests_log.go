@@ -22,16 +22,18 @@ type RequestsLog struct {
 	TraceSampled     bool      `json:"trace_sampled"`
 
 	// the json payload fields from the requests log, moved to the top level
-	BackendTargetProjectNumber string                               `json:"backend_target_project_number"`
+	BackendTargetProjectNumber string                               `json:"backend_target_project_number,omitempty"`
 	CacheDecision              []string                             `json:"cache_decision,omitempty"`
 	RemoteIp                   string                               `json:"remote_ip,omitempty"`
 	StatusDetails              string                               `json:"status_details,omitempty"`
 	EnforcedSecurityPolicy     *RequestLogSecurityPolicy            `json:"enforced_security_policy" parquet:"type=JSON"`
 	PreviewSecurityPolicy      *RequestLogSecurityPolicy            `json:"preview_security_policy,omitempty" parquet:"type=JSON"`
 	SecurityPolicyRequestData  *RequestLogSecurityPolicyRequestData `json:"security_policy_request_data,omitempty" parquet:"type=JSON"`
+	EnforcedEdgeSecurityPolicy *RequestLogEdgeSecurityPolicy        `json:"enforced_edge_security_policy,omitempty" parquet:"type=JSON"`
+	PreviewEdgeSecurityPolicy  *RequestLogEdgeSecurityPolicy        `json:"preview_edge_security_policy,omitempty" parquet:"type=JSON"`
 
 	// other top level fields
-	Resource    *RequestLogResource    `json:"resource" parquet:"type=JSON"`
+	Resource    *RequestLogResource    `json:"resource,omitempty" parquet:"type=JSON"`
 	HttpRequest *RequestLogHttpRequest `json:"http_request,omitempty" parquet:"type=JSON"`
 }
 
@@ -63,17 +65,40 @@ type RequestLogHttpRequest struct {
 }
 
 type RequestLogSecurityPolicy struct {
-	ConfiguredAction           string   `json:"configured_action,omitempty"`
-	Name                       string   `json:"name,omitempty"`
-	Outcome                    string   `json:"outcome,omitempty"`
-	Priority                   int      `json:"priority,omitempty"`
-	PreconfiguredExpressionIds []string `json:"preconfigured_expression_ids,omitempty"`
+	ConfiguredAction    string                        `json:"configured_action,omitempty"`
+	RateLimitAction     *RequestLogRateLimitAction    `json:"rate_limit_action,omitempty"`
+	Name                string                        `json:"name,omitempty"`
+	Outcome             string                        `json:"outcome,omitempty"`
+	Priority            int                           `json:"priority,omitempty"`
+	PreconfiguredExprId string                        `json:"preconfigured_expr_id,omitempty"`
+	ThreatIntelligence  *RequestLogThreatIntelligence `json:"threat_intelligence,omitempty"`
+	AddressGroup        *RequestLogAddressGroup       `json:"address_group,omitempty"`
+	MatchedFieldType    string                        `json:"matched_field_type,omitempty"`
+	MatchedFieldValue   string                        `json:"matched_field_value,omitempty"`
+	MatchedFieldName    string                        `json:"matched_field_name,omitempty"`
+	MatchedOffset       int                           `json:"matched_offset,omitempty"`
+	MatchedLength       int                           `json:"matched_length,omitempty"`
+}
+
+type RequestLogRateLimitAction struct {
+	Key     string `json:"key,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+}
+
+type RequestLogThreatIntelligence struct {
+	Categories []string `json:"categories,omitempty"`
+}
+
+type RequestLogAddressGroup struct {
+	Names []string `json:"names,omitempty"`
 }
 
 type RequestLogSecurityPolicyRequestData struct {
-	RemoteIpInfo      *RequestLogRemoteIpInfo `json:"remote_ip_info,omitempty"`
-	TlsJa3Fingerprint string                  `json:"tls_ja3_fingerprint,omitempty"`
-	TlsJa4Fingerprint string                  `json:"tls_ja4_fingerprint,omitempty"`
+	RemoteIpInfo          *RequestLogRemoteIpInfo   `json:"remote_ip_info,omitempty"`
+	RecaptchaActionToken  *RequestLogRecaptchaToken `json:"recaptcha_action_token,omitempty"`
+	RecaptchaSessionToken *RequestLogRecaptchaToken `json:"recaptcha_session_token,omitempty"`
+	TlsJa3Fingerprint     string                    `json:"tls_ja3_fingerprint,omitempty"`
+	TlsJa4Fingerprint     string                    `json:"tls_ja4_fingerprint,omitempty"`
 }
 
 type RequestLogRemoteIpInfo struct {
@@ -81,10 +106,19 @@ type RequestLogRemoteIpInfo struct {
 	RegionCode string `json:"region_code,omitempty"`
 }
 
+type RequestLogEdgeSecurityPolicy struct {
+	Name             string `json:"name,omitempty"`
+	Priority         int    `json:"priority,omitempty"`
+	ConfiguredAction string `json:"configured_action,omitempty"`
+	Outcome          string `json:"outcome,omitempty"`
+}
+
+type RequestLogRecaptchaToken struct {
+	Score float64 `json:"score,omitempty"`
+}
+
 func (a *RequestsLog) GetColumnDescriptions() map[string]string {
 	return map[string]string{
-		// CommonFields (inherited)
-
 		"timestamp":                     "The date and time when the request was received, in ISO 8601 format.",
 		"receive_timestamp":             "The time when the log entry was received by Cloud Logging.",
 		"log_name":                      "The name of the log that recorded the request, e.g., 'projects/[PROJECT_ID]/logs/requests'.",
@@ -100,6 +134,8 @@ func (a *RequestsLog) GetColumnDescriptions() map[string]string {
 		"enforced_security_policy":      "Details about the enforced security policy for the request.",
 		"preview_security_policy":       "Details about the preview security policy for the request, if any.",
 		"security_policy_request_data":  "Additional data about the security policy request.",
+		"enforced_edge_security_policy": "Details about the enforced edge security policy for the request.",
+		"preview_edge_security_policy":  "Details about the preview edge security policy for the request, if any.",
 		"remote_ip":                     "The remote IP address from which the request originated.",
 		"status_details":                "Additional status details for the request.",
 

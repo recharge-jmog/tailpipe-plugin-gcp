@@ -138,64 +138,123 @@ func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
 			}
 		}
 	}
-	row.RemoteIp = jsonPayload["remoteIp"].(string)
-	row.StatusDetails = jsonPayload["statusDetails"].(string)
 
-	securityPolicyMap := jsonPayload["enforcedSecurityPolicy"].(map[string]interface{})
-
-	row.EnforcedSecurityPolicy = &RequestLogSecurityPolicy{
-		// Direct assignments for guaranteed scalar fields
-		ConfiguredAction: securityPolicyMap["configuredAction"].(string),
-		Name:             securityPolicyMap["name"].(string),
-		Outcome:          securityPolicyMap["outcome"].(string),
-		Priority:         int(securityPolicyMap["priority"].(float64)), // JSON numbers are float64
+	if v, ok := jsonPayload["remoteIp"].(string); ok {
+		row.RemoteIp = v
 	}
 
-	// Handle PreconfiguredExpressionIds only if it exists *and* has values.
-	if rawIds, ok := securityPolicyMap["preconfiguredExpressionIds"].([]interface{}); ok && len(rawIds) > 0 {
-		row.EnforcedSecurityPolicy.PreconfiguredExpressionIds = make([]string, 0, len(rawIds))
-		for _, id := range rawIds {
-			row.EnforcedSecurityPolicy.PreconfiguredExpressionIds = append(row.EnforcedSecurityPolicy.PreconfiguredExpressionIds, id.(string))
+	if v, ok := jsonPayload["statusDetails"].(string); ok {
+		row.StatusDetails = v
+	}
+
+	// Safely extract security policy map
+	if securityPolicyMap, ok := jsonPayload["enforcedSecurityPolicy"].(map[string]interface{}); ok && securityPolicyMap != nil {
+		policy := &RequestLogSecurityPolicy{}
+		if val, ok := securityPolicyMap["configuredAction"].(string); ok {
+			policy.ConfiguredAction = val
 		}
+		if val, ok := securityPolicyMap["name"].(string); ok {
+			policy.Name = val
+		}
+		if val, ok := securityPolicyMap["outcome"].(string); ok {
+			policy.Outcome = val
+		}
+		if val, ok := securityPolicyMap["priority"].(float64); ok {
+			policy.Priority = int(val)
+		}
+
+		if rawIds, ok := securityPolicyMap["preconfiguredExpressionIds"].([]interface{}); ok && len(rawIds) > 0 {
+			if ruleId, ok := rawIds[0].(string); ok {
+				policy.PreconfiguredExprId = ruleId
+			}
+		}
+		row.EnforcedSecurityPolicy = policy
 	}
 
 	if previewPolicyMap, ok := jsonPayload["previewSecurityPolicy"].(map[string]interface{}); ok {
 		// If it exists, initialize the PreviewSecurityPolicy struct
-		row.PreviewSecurityPolicy = &RequestLogSecurityPolicy{
-			// Direct assignments for its guaranteed scalar fields within previewPolicyMap
-			ConfiguredAction: previewPolicyMap["configuredAction"].(string),
-			Name:             previewPolicyMap["name"].(string),
-			Outcome:          previewPolicyMap["outcome"].(string),
-			Priority:         int(previewPolicyMap["priority"].(float64)), // JSON numbers are float64
+		row.PreviewSecurityPolicy = &RequestLogSecurityPolicy{}
+
+		// Safely extract fields with type checking
+		if v, ok := previewPolicyMap["configuredAction"].(string); ok {
+			row.PreviewSecurityPolicy.ConfiguredAction = v
+		}
+		if v, ok := previewPolicyMap["name"].(string); ok {
+			row.PreviewSecurityPolicy.Name = v
+		}
+		if v, ok := previewPolicyMap["outcome"].(string); ok {
+			row.PreviewSecurityPolicy.Outcome = v
+		}
+		if v, ok := previewPolicyMap["priority"].(float64); ok {
+			row.PreviewSecurityPolicy.Priority = int(v)
 		}
 
 		// Handle PreconfiguredExpressionIds within PreviewSecurityPolicy only if it exists and has values.
 		if rawIds, ok := previewPolicyMap["preconfiguredExpressionIds"].([]interface{}); ok && len(rawIds) > 0 {
-			row.PreviewSecurityPolicy.PreconfiguredExpressionIds = make([]string, 0, len(rawIds))
-			for _, id := range rawIds {
-				row.PreviewSecurityPolicy.PreconfiguredExpressionIds = append(row.PreviewSecurityPolicy.PreconfiguredExpressionIds, id.(string))
+			if ruleId, ok := rawIds[0].(string); ok {
+				row.PreviewSecurityPolicy.PreconfiguredExprId = ruleId
 			}
 		}
 	}
 
-	// === 5. Map HTTPRequest (guaranteed to be present due to early exit) ===
+	// Map SecurityPolicyRequestData if present
+	if secPolicyData, ok := jsonPayload["securityPolicyRequestData"].(map[string]interface{}); ok {
+		row.SecurityPolicyRequestData = &RequestLogSecurityPolicyRequestData{}
+
+		if v, ok := secPolicyData["tlsJa3Fingerprint"].(string); ok {
+			row.SecurityPolicyRequestData.TlsJa3Fingerprint = v
+		}
+		if v, ok := secPolicyData["tlsJa4Fingerprint"].(string); ok {
+			row.SecurityPolicyRequestData.TlsJa4Fingerprint = v
+		}
+
+		if remoteIpInfo, ok := secPolicyData["remoteIpInfo"].(map[string]interface{}); ok {
+			row.SecurityPolicyRequestData.RemoteIpInfo = &RequestLogRemoteIpInfo{}
+			if v, ok := remoteIpInfo["asn"].(float64); ok {
+				row.SecurityPolicyRequestData.RemoteIpInfo.Asn = int(v)
+			}
+			if v, ok := remoteIpInfo["regionCode"].(string); ok {
+				row.SecurityPolicyRequestData.RemoteIpInfo.RegionCode = v
+			}
+		}
+
+		// Handle recaptcha tokens
+		if recaptchaActionToken, ok := secPolicyData["recaptchaActionToken"].(map[string]interface{}); ok {
+			row.SecurityPolicyRequestData.RecaptchaActionToken = &RequestLogRecaptchaToken{}
+			if v, ok := recaptchaActionToken["score"].(float64); ok {
+				row.SecurityPolicyRequestData.RecaptchaActionToken.Score = v
+			}
+		}
+		if recaptchaSessionToken, ok := secPolicyData["recaptchaSessionToken"].(map[string]interface{}); ok {
+			row.SecurityPolicyRequestData.RecaptchaSessionToken = &RequestLogRecaptchaToken{}
+			if v, ok := recaptchaSessionToken["score"].(float64); ok {
+				row.SecurityPolicyRequestData.RecaptchaSessionToken.Score = v
+			}
+		}
+	}
+
+	// === 6. Map HTTPRequest (guaranteed to be present due to early exit) ===
 	// No 'if' check needed here for item.GetHttpRequest() because we already filtered.
 	httpRequestPb := item.GetHttpRequest()
 	// Sanitize URLs to handle Unicode escape sequences that cause parsing errors
 	requestUrl := sanitizeURL(httpRequestPb.GetRequestUrl())
 	referer := sanitizeURL(httpRequestPb.GetReferer())
 	row.HttpRequest = &RequestLogHttpRequest{
-		RequestMethod: httpRequestPb.GetRequestMethod(),
-		RequestUrl:    requestUrl,
-		RequestSize:   httpRequestPb.GetRequestSize(),
-		Referer:       referer,
-		UserAgent:     httpRequestPb.GetUserAgent(),
-		Status:        httpRequestPb.GetStatus(),
-		ResponseSize:  httpRequestPb.GetResponseSize(),
-		RemoteIp:      httpRequestPb.GetRemoteIp(),
-		Latency:       httpRequestPb.GetLatency().String(), // Latency is a duration type in Protobuf
-		ServerIp:      httpRequestPb.GetServerIp(),
-		Protocol:      httpRequestPb.GetProtocol(),
+		RequestMethod:                  httpRequestPb.GetRequestMethod(),
+		RequestUrl:                     requestUrl,
+		RequestSize:                    httpRequestPb.GetRequestSize(),
+		Referer:                        referer,
+		UserAgent:                      httpRequestPb.GetUserAgent(),
+		Status:                         httpRequestPb.GetStatus(),
+		ResponseSize:                   httpRequestPb.GetResponseSize(),
+		RemoteIp:                       httpRequestPb.GetRemoteIp(),
+		Latency:                        httpRequestPb.GetLatency().String(), // Latency is a duration type in Protobuf
+		ServerIp:                       httpRequestPb.GetServerIp(),
+		Protocol:                       httpRequestPb.GetProtocol(),
+		CacheFillBytes:                 httpRequestPb.GetCacheFillBytes(),
+		CacheLookup:                    httpRequestPb.GetCacheLookup(),
+		CacheHit:                       httpRequestPb.GetCacheHit(),
+		CacheValidatedWithOriginServer: httpRequestPb.GetCacheValidatedWithOriginServer(),
 	}
 
 	return row, nil
@@ -204,17 +263,12 @@ func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
 func mapFromBucketJson(itemBytes []byte) (*RequestsLog, error) {
 	var log requestsLog
 	if err := json.Unmarshal(itemBytes, &log); err != nil {
-		return nil, fmt.Errorf("failed to parse requests log: %w", err)
-	}
-
-	// Filter by log name - only process requests logs
-	// Requests logs have log names like "projects/{project}/logs/requests"
-	if !strings.Contains(log.LogName, "/logs/requests") {
-		// Not a requests log, skip it
-		return nil, nil
+		return nil, fmt.Errorf("failed to parse requests log JSON: %w", err)
 	}
 
 	row := NewRequestsLog()
+
+	// Map top-level fields
 	row.Timestamp = log.Timestamp
 	row.ReceiveTimestamp = log.ReceiveTimestamp
 	row.LogName = log.LogName
@@ -222,25 +276,115 @@ func mapFromBucketJson(itemBytes []byte) (*RequestsLog, error) {
 	row.Severity = log.Severity
 	row.Trace = log.Trace
 	row.SpanId = log.SpanId
-	row.Resource = &RequestLogResource{
-		Type:   log.Resource.Type,
-		Labels: log.Resource.Labels,
+	row.TraceSampled = log.TraceSampled
+
+	// Only create objects if they exist in the source log.
+	// This avoids creating empty-but-non-nil objects that the downstream
+	// validator might reject.
+
+	if log.Resource != nil {
+		row.Resource = &RequestLogResource{
+			Type: log.Resource.Type,
+			Labels: func() map[string]string {
+				if log.Resource.Labels != nil {
+					return log.Resource.Labels
+				}
+				return make(map[string]string)
+			}(),
+		}
 	}
+
+	// Map JSON Payload fields
+	row.BackendTargetProjectNumber = log.JsonPayload.BackendTargetProjectNumber
+	row.CacheDecision = log.JsonPayload.CacheDecision
+	row.RemoteIp = log.JsonPayload.RemoteIp
+	row.StatusDetails = log.JsonPayload.StatusDetails
+
+	if log.JsonPayload.EnforcedSecurityPolicy != nil {
+		ids := []string{}
+		if log.JsonPayload.EnforcedSecurityPolicy.PreconfiguredExprIds != nil {
+			ids = log.JsonPayload.EnforcedSecurityPolicy.PreconfiguredExprIds
+		}
+		var exprId string
+		if len(ids) > 0 {
+			exprId = ids[0]
+		}
+		row.EnforcedSecurityPolicy = &RequestLogSecurityPolicy{
+			ConfiguredAction:    log.JsonPayload.EnforcedSecurityPolicy.ConfiguredAction,
+			Name:                log.JsonPayload.EnforcedSecurityPolicy.Name,
+			Outcome:             log.JsonPayload.EnforcedSecurityPolicy.Outcome,
+			Priority:            log.JsonPayload.EnforcedSecurityPolicy.Priority,
+			MatchedFieldType:    log.JsonPayload.EnforcedSecurityPolicy.MatchedFieldType,
+			MatchedFieldValue:   log.JsonPayload.EnforcedSecurityPolicy.MatchedFieldValue,
+			MatchedFieldName:    log.JsonPayload.EnforcedSecurityPolicy.MatchedFieldName,
+			MatchedOffset:       log.JsonPayload.EnforcedSecurityPolicy.MatchedOffset,
+			MatchedLength:       log.JsonPayload.EnforcedSecurityPolicy.MatchedLength,
+			PreconfiguredExprId: exprId,
+		}
+	}
+
+	if log.JsonPayload.PreviewSecurityPolicy != nil {
+		ids := []string{}
+		if log.JsonPayload.PreviewSecurityPolicy.PreconfiguredExprIds != nil {
+			ids = log.JsonPayload.PreviewSecurityPolicy.PreconfiguredExprIds
+		}
+		// preconfiguredExprIds is always an array of one string, grab the index 0 slice and case this to a string in the row struct
+		var exprId string
+		if len(ids) > 0 {
+			exprId = ids[0]
+		}
+		row.PreviewSecurityPolicy = &RequestLogSecurityPolicy{
+			ConfiguredAction:    log.JsonPayload.PreviewSecurityPolicy.ConfiguredAction,
+			Name:                log.JsonPayload.PreviewSecurityPolicy.Name,
+			Outcome:             log.JsonPayload.PreviewSecurityPolicy.Outcome,
+			Priority:            log.JsonPayload.PreviewSecurityPolicy.Priority,
+			MatchedFieldType:    log.JsonPayload.PreviewSecurityPolicy.MatchedFieldType,
+			MatchedFieldValue:   log.JsonPayload.PreviewSecurityPolicy.MatchedFieldValue,
+			MatchedFieldName:    log.JsonPayload.PreviewSecurityPolicy.MatchedFieldName,
+			MatchedOffset:       log.JsonPayload.PreviewSecurityPolicy.MatchedOffset,
+			MatchedLength:       log.JsonPayload.PreviewSecurityPolicy.MatchedLength,
+			PreconfiguredExprId: exprId,
+		}
+	}
+
+	if log.JsonPayload.SecurityPolicyRequestData != nil {
+		row.SecurityPolicyRequestData = &RequestLogSecurityPolicyRequestData{
+			TlsJa3Fingerprint: log.JsonPayload.SecurityPolicyRequestData.TlsJa3Fingerprint,
+			TlsJa4Fingerprint: log.JsonPayload.SecurityPolicyRequestData.TlsJa4Fingerprint,
+			// Always initialize the nested object to be safe.
+			RemoteIpInfo: &RequestLogRemoteIpInfo{},
+		}
+
+		if log.JsonPayload.SecurityPolicyRequestData.RemoteIpInfo != nil {
+			row.SecurityPolicyRequestData.RemoteIpInfo = &RequestLogRemoteIpInfo{
+				Asn:        log.JsonPayload.SecurityPolicyRequestData.RemoteIpInfo.Asn,
+				RegionCode: log.JsonPayload.SecurityPolicyRequestData.RemoteIpInfo.RegionCode,
+			}
+		}
+	}
+
 	// Sanitize URLs to handle Unicode escape sequences that cause parsing errors
-	requestUrl := sanitizeURL(log.HttpRequest.RequestURL)
-	referer := sanitizeURL(log.HttpRequest.Referer)
-	row.HttpRequest = &RequestLogHttpRequest{
-		RequestMethod: log.HttpRequest.RequestMethod,
-		RequestUrl:    requestUrl,
-		RequestSize:   int64(log.HttpRequest.RequestSize),
-		Status:        log.HttpRequest.Status,
-		ResponseSize:  int64(log.HttpRequest.ResponseSize),
-		UserAgent:     log.HttpRequest.UserAgent,
-		RemoteIp:      log.HttpRequest.RemoteIP,
-		ServerIp:      log.HttpRequest.ServerIP,
-		Referer:       referer,
-		Latency:       log.HttpRequest.Latency,
-		CacheLookup:   log.HttpRequest.CacheLookup,
+	if log.HttpRequest == nil {
+		row.HttpRequest = &RequestLogHttpRequest{}
+	} else {
+		requestUrl := sanitizeURL(log.HttpRequest.RequestURL)
+		referer := sanitizeURL(log.HttpRequest.Referer)
+		row.HttpRequest = &RequestLogHttpRequest{
+			RequestMethod:                  log.HttpRequest.RequestMethod,
+			RequestUrl:                     requestUrl,
+			RequestSize:                    int64(log.HttpRequest.RequestSize),
+			Status:                         log.HttpRequest.Status,
+			ResponseSize:                   int64(log.HttpRequest.ResponseSize),
+			UserAgent:                      log.HttpRequest.UserAgent,
+			RemoteIp:                       log.HttpRequest.RemoteIP,
+			ServerIp:                       log.HttpRequest.ServerIP,
+			Referer:                        referer,
+			Latency:                        log.HttpRequest.Latency,
+			CacheLookup:                    log.HttpRequest.CacheLookup,
+			CacheHit:                       log.HttpRequest.CacheHit,
+			CacheValidatedWithOriginServer: log.HttpRequest.CacheValidatedWithOriginServer,
+			CacheFillBytes:                 int64(log.HttpRequest.CacheFillBytes),
+		}
 	}
 
 	return row, nil
@@ -257,6 +401,7 @@ type requestsLog struct {
 	Trace            string       `json:"trace,omitempty"`
 	SpanId           string       `json:"spanId,omitempty"`
 	HttpRequest      *httpRequest `json:"httpRequest,omitempty"`
+	TraceSampled     bool         `json:"traceSampled,omitempty"`
 }
 
 type resource struct {
@@ -268,50 +413,74 @@ type jsonPayload struct {
 	TypeName                   string                               `json:"@type"`
 	BackendTargetProjectNumber string                               `json:"backendTargetProjectNumber"`
 	CacheDecision              []string                             `json:"cacheDecision"`
-	EnforcedSecurityPolicy     *requestLogEnforcedSecurityPolicy    `json:"enforcedSecurityPolicy"`
-	PreviewSecurityPolicy      *requestLogPreviewSecurityPolicy     `json:"previewSecurityPolicy,omitempty"`
+	CacheId                    string                               `json:"cacheId,omitempty"`
+	CompressionStatus          string                               `json:"compressionStatus,omitempty"`
+	EnforcedSecurityPolicy     *requestLogSecurityPolicy            `json:"enforcedSecurityPolicy"`
+	PreviewSecurityPolicy      *requestLogSecurityPolicy            `json:"previewSecurityPolicy,omitempty"`
 	SecurityPolicyRequestData  *requestLogSecurityPolicyRequestData `json:"securityPolicyRequestData"`
 	RemoteIp                   string                               `json:"remoteIp"`
 	StatusDetails              string                               `json:"statusDetails"`
 }
 
 type httpRequest struct {
-	RequestMethod string        `json:"requestMethod"`
-	RequestURL    string        `json:"requestUrl"`
-	RequestSize   flexibleInt64 `json:"requestSize,omitempty"`
-	Status        int32         `json:"status"`
-	ResponseSize  flexibleInt64 `json:"responseSize,omitempty"`
-	UserAgent     string        `json:"userAgent"`
-	RemoteIP      string        `json:"remoteIp"`
-	ServerIP      string        `json:"serverIp,omitempty"`
-	Referer       string        `json:"referer,omitempty"`
-	Latency       string        `json:"latency,omitempty"`
-	CacheLookup   bool          `json:"cacheLookup,omitempty"`
+	RequestMethod                  string        `json:"requestMethod"`
+	RequestURL                     string        `json:"requestUrl"`
+	RequestSize                    flexibleInt64 `json:"requestSize,omitempty"`
+	Status                         int32         `json:"status"`
+	ResponseSize                   flexibleInt64 `json:"responseSize,omitempty"`
+	UserAgent                      string        `json:"userAgent"`
+	RemoteIP                       string        `json:"remoteIp"`
+	ServerIP                       string        `json:"serverIp,omitempty"`
+	Referer                        string        `json:"referer,omitempty"`
+	Latency                        string        `json:"latency,omitempty"`
+	CacheLookup                    bool          `json:"cacheLookup,omitempty"`
+	CacheHit                       bool          `json:"cacheHit,omitempty"`
+	CacheValidatedWithOriginServer bool          `json:"cacheValidatedWithOriginServer,omitempty"`
+	CacheFillBytes                 flexibleInt64 `json:"cacheFillBytes,omitempty"`
 }
 
-type requestLogEnforcedSecurityPolicy struct {
-	ConfiguredAction           string   `json:"configuredAction"`
-	Name                       string   `json:"name"`
-	Outcome                    string   `json:"outcome"`
-	Priority                   int      `json:"priority"`
-	PreconfiguredExpressionIds []string `json:"preconfiguredExpressionIds,omitempty"`
-}
-
-type requestLogPreviewSecurityPolicy struct {
-	ConfiguredAction           string   `json:"configuredAction"`
-	Name                       string   `json:"name"`
-	Outcome                    string   `json:"outcome"`
-	Priority                   int      `json:"priority"`
-	PreconfiguredExpressionIds []string `json:"preconfiguredExpressionIds,omitempty"`
+type requestLogSecurityPolicy struct {
+	ConfiguredAction     string                        `json:"configuredAction"`
+	Name                 string                        `json:"name"`
+	Outcome              string                        `json:"outcome"`
+	Priority             int                           `json:"priority"`
+	PreconfiguredExprIds []string                      `json:"preconfiguredExprIds,omitempty"`
+	RateLimitAction      *requestLogRateLimitAction    `json:"rateLimitAction,omitempty"`
+	ThreatIntelligence   *requestLogThreatIntelligence `json:"threatIntelligence,omitempty"`
+	AddressGroup         *requestLogAddressGroup       `json:"addressGroup,omitempty"`
+	MatchedFieldType     string                        `json:"matchedFieldType,omitempty"`
+	MatchedFieldValue    string                        `json:"matchedFieldValue,omitempty"`
+	MatchedFieldName     string                        `json:"matchedFieldName,omitempty"`
+	MatchedOffset        int                           `json:"matchedOffset,omitempty"`
+	MatchedLength        int                           `json:"matchedLength,omitempty"`
 }
 
 type requestLogSecurityPolicyRequestData struct {
-	RemoteIpInfo      *requestLogRemoteIpInfo `json:"remoteIpInfo"`
-	TlsJa3Fingerprint string                  `json:"tlsJa3Fingerprint"`
-	TlsJa4Fingerprint string                  `json:"tlsJa4Fingerprint"`
+	RemoteIpInfo          *requestLogRemoteIpInfo   `json:"remoteIpInfo"`
+	TlsJa3Fingerprint     string                    `json:"tlsJa3Fingerprint"`
+	TlsJa4Fingerprint     string                    `json:"tlsJa4Fingerprint"`
+	RecaptchaActionToken  *requestLogRecaptchaToken `json:"recaptchaActionToken,omitempty"`
+	RecaptchaSessionToken *requestLogRecaptchaToken `json:"recaptchaSessionToken,omitempty"`
 }
 
 type requestLogRemoteIpInfo struct {
 	Asn        int    `json:"asn"`
 	RegionCode string `json:"regionCode"`
+}
+
+type requestLogRecaptchaToken struct {
+	Score float64 `json:"score"`
+}
+
+type requestLogRateLimitAction struct {
+	Key     string `json:"key"`
+	Outcome string `json:"outcome"`
+}
+
+type requestLogThreatIntelligence struct {
+	Categories []string `json:"categories"`
+}
+
+type requestLogAddressGroup struct {
+	Names []string `json:"names"`
 }

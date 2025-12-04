@@ -64,11 +64,11 @@ func (c *RequestsLogTable) EnrichRow(row *RequestsLog, sourceEnrichmentFields sc
 	if row.HttpRequest != nil {
 		if row.HttpRequest.RemoteIp != "" {
 			row.TpIps = append(row.TpIps, row.HttpRequest.RemoteIp)
-			row.TpDestinationIP = &row.HttpRequest.RemoteIp
+			row.TpSourceIP = &row.HttpRequest.RemoteIp
 		}
 		if row.HttpRequest.ServerIp != "" {
 			row.TpIps = append(row.TpIps, row.HttpRequest.ServerIp)
-			row.TpSourceIP = &row.HttpRequest.ServerIp
+			row.TpDestinationIP = &row.HttpRequest.ServerIp
 		}
 	}
 
