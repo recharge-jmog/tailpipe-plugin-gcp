@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
@@ -17,6 +20,61 @@ type RequestsLogMapper struct {
 
 func (m *RequestsLogMapper) Identifier() string {
 	return "gcp_requests_log_mapper"
+}
+
+// flexibleInt64 can unmarshal from both string and int64 JSON values
+type flexibleInt64 int64
+
+func (f *flexibleInt64) UnmarshalJSON(data []byte) error {
+	// Handle null or empty string
+	if len(data) == 0 || string(data) == "null" || string(data) == `""` {
+		*f = 0
+		return nil
+	}
+
+	// Try to unmarshal as string first
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		// If it's an empty string, set to 0
+		if str == "" {
+			*f = 0
+			return nil
+		}
+		// If it's a string, parse it
+		val, err := strconv.ParseInt(str, 10, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse string as int64: %w", err)
+		}
+		*f = flexibleInt64(val)
+		return nil
+	}
+
+	// If not a string, try as int64
+	var val int64
+	if err := json.Unmarshal(data, &val); err != nil {
+		return fmt.Errorf("failed to unmarshal as int64 or string: %w", err)
+	}
+	*f = flexibleInt64(val)
+	return nil
+}
+
+// sanitizeURL converts Unicode escape sequences (e.g., %u002e) to their actual characters
+// to prevent URL parsing errors. This handles malformed URLs that contain Unicode escapes
+// instead of proper URL percent-encoding.
+func sanitizeURL(url string) string {
+	// Match Unicode escape sequences like %u002e, %u0041, etc.
+	re := regexp.MustCompile(`%u([0-9a-fA-F]{4})`)
+	return re.ReplaceAllStringFunc(url, func(match string) string {
+		// Extract the hex code (e.g., "002e" from "%u002e")
+		hexCode := match[2:6] // Skip "%u" prefix
+		code, err := strconv.ParseInt(hexCode, 16, 32)
+		if err != nil {
+			// If parsing fails, return the original match
+			return match
+		}
+		// Convert to Unicode character
+		return string(rune(code))
+	})
 }
 
 func (m *RequestsLogMapper) Map(_ context.Context, a any, _ ...mappers.MapOption[*RequestsLog]) (*RequestsLog, error) {
@@ -33,7 +91,15 @@ func (m *RequestsLogMapper) Map(_ context.Context, a any, _ ...mappers.MapOption
 }
 
 func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
-	// === 1. Early exit for non-HTTP(S) logs or those missing a payload ===
+	// === 1. Filter by log name - only process requests logs ===
+	// Requests logs have log names like "projects/{project}/logs/requests"
+	logName := item.GetLogName()
+	if !strings.Contains(logName, "/logs/requests") {
+		// Not a requests log, skip it
+		return nil, nil
+	}
+
+	// === 2. Early exit for non-HTTP(S) logs or those missing a payload ===
 	if item.GetHttpRequest() == nil || item.GetJsonPayload() == nil {
 		return nil, nil
 	}
@@ -115,11 +181,14 @@ func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
 	// === 5. Map HTTPRequest (guaranteed to be present due to early exit) ===
 	// No 'if' check needed here for item.GetHttpRequest() because we already filtered.
 	httpRequestPb := item.GetHttpRequest()
+	// Sanitize URLs to handle Unicode escape sequences that cause parsing errors
+	requestUrl := sanitizeURL(httpRequestPb.GetRequestUrl())
+	referer := sanitizeURL(httpRequestPb.GetReferer())
 	row.HttpRequest = &RequestLogHttpRequest{
 		RequestMethod: httpRequestPb.GetRequestMethod(),
-		RequestUrl:    httpRequestPb.GetRequestUrl(),
+		RequestUrl:    requestUrl,
 		RequestSize:   httpRequestPb.GetRequestSize(),
-		Referer:       httpRequestPb.GetReferer(),
+		Referer:       referer,
 		UserAgent:     httpRequestPb.GetUserAgent(),
 		Status:        httpRequestPb.GetStatus(),
 		ResponseSize:  httpRequestPb.GetResponseSize(),
@@ -137,6 +206,14 @@ func mapFromBucketJson(itemBytes []byte) (*RequestsLog, error) {
 	if err := json.Unmarshal(itemBytes, &log); err != nil {
 		return nil, fmt.Errorf("failed to parse requests log: %w", err)
 	}
+
+	// Filter by log name - only process requests logs
+	// Requests logs have log names like "projects/{project}/logs/requests"
+	if !strings.Contains(log.LogName, "/logs/requests") {
+		// Not a requests log, skip it
+		return nil, nil
+	}
+
 	row := NewRequestsLog()
 	row.Timestamp = log.Timestamp
 	row.ReceiveTimestamp = log.ReceiveTimestamp
@@ -149,16 +226,19 @@ func mapFromBucketJson(itemBytes []byte) (*RequestsLog, error) {
 		Type:   log.Resource.Type,
 		Labels: log.Resource.Labels,
 	}
+	// Sanitize URLs to handle Unicode escape sequences that cause parsing errors
+	requestUrl := sanitizeURL(log.HttpRequest.RequestURL)
+	referer := sanitizeURL(log.HttpRequest.Referer)
 	row.HttpRequest = &RequestLogHttpRequest{
 		RequestMethod: log.HttpRequest.RequestMethod,
-		RequestUrl:    log.HttpRequest.RequestURL,
-		RequestSize:   log.HttpRequest.RequestSize,
+		RequestUrl:    requestUrl,
+		RequestSize:   int64(log.HttpRequest.RequestSize),
 		Status:        log.HttpRequest.Status,
-		ResponseSize:  log.HttpRequest.ResponseSize,
+		ResponseSize:  int64(log.HttpRequest.ResponseSize),
 		UserAgent:     log.HttpRequest.UserAgent,
 		RemoteIp:      log.HttpRequest.RemoteIP,
 		ServerIp:      log.HttpRequest.ServerIP,
-		Referer:       log.HttpRequest.Referer,
+		Referer:       referer,
 		Latency:       log.HttpRequest.Latency,
 		CacheLookup:   log.HttpRequest.CacheLookup,
 	}
@@ -196,17 +276,17 @@ type jsonPayload struct {
 }
 
 type httpRequest struct {
-	RequestMethod string `json:"requestMethod"`
-	RequestURL    string `json:"requestUrl"`
-	RequestSize   int64  `json:"requestSize,omitempty"`
-	Status        int32  `json:"status"`
-	ResponseSize  int64  `json:"responseSize,omitempty"`
-	UserAgent     string `json:"userAgent"`
-	RemoteIP      string `json:"remoteIp"`
-	ServerIP      string `json:"serverIp,omitempty"`
-	Referer       string `json:"referer,omitempty"`
-	Latency       string `json:"latency,omitempty"`
-	CacheLookup   bool   `json:"cacheLookup,omitempty"`
+	RequestMethod string        `json:"requestMethod"`
+	RequestURL    string        `json:"requestUrl"`
+	RequestSize   flexibleInt64 `json:"requestSize,omitempty"`
+	Status        int32         `json:"status"`
+	ResponseSize  flexibleInt64 `json:"responseSize,omitempty"`
+	UserAgent     string        `json:"userAgent"`
+	RemoteIP      string        `json:"remoteIp"`
+	ServerIP      string        `json:"serverIp,omitempty"`
+	Referer       string        `json:"referer,omitempty"`
+	Latency       string        `json:"latency,omitempty"`
+	CacheLookup   bool          `json:"cacheLookup,omitempty"`
 }
 
 type requestLogEnforcedSecurityPolicy struct {

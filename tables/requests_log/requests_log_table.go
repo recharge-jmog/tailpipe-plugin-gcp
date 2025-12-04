@@ -6,7 +6,7 @@ import (
 	"github.com/rs/xid"
 
 	"github.com/turbot/pipe-fittings/v2/utils"
-	"github.com/turbot/tailpipe-plugin-gcp/sources/cloud_logging_api"
+	logging_log_entry "github.com/turbot/tailpipe-plugin-gcp/sources/logging_log_entry"
 	"github.com/turbot/tailpipe-plugin-gcp/sources/storage_bucket"
 	"github.com/turbot/tailpipe-plugin-sdk/artifact_source"
 	"github.com/turbot/tailpipe-plugin-sdk/artifact_source_config"
@@ -32,7 +32,7 @@ func (c *RequestsLogTable) GetSourceMetadata() ([]*table.SourceMetadata[*Request
 
 	return []*table.SourceMetadata[*RequestsLog]{
 		{
-			SourceName: cloud_logging_api.CloudLoggingAPISourceIdentifier,
+			SourceName: logging_log_entry.LoggingLogEntrySourceIdentifier,
 			Mapper:     &RequestsLogMapper{},
 		},
 		{
@@ -59,7 +59,6 @@ func (c *RequestsLogTable) EnrichRow(row *RequestsLog, sourceEnrichmentFields sc
 	row.TpID = xid.New().String()
 	row.TpTimestamp = row.Timestamp
 	row.TpIngestTimestamp = time.Now()
-	// row.TpIndex = schema.DefaultIndex
 	row.TpDate = row.Timestamp.Truncate(24 * time.Hour)
 
 	if row.HttpRequest != nil {
