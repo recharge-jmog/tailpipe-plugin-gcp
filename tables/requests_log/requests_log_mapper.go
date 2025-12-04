@@ -91,19 +91,6 @@ func (m *RequestsLogMapper) Map(_ context.Context, a any, _ ...mappers.MapOption
 }
 
 func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
-	// === 1. Filter by log name - only process requests logs ===
-	// Requests logs have log names like "projects/{project}/logs/requests"
-	logName := item.GetLogName()
-	if !strings.Contains(logName, "/logs/requests") {
-		// Not a requests log, skip it
-		return nil, nil
-	}
-
-	// === 2. Early exit for non-HTTP(S) logs or those missing a payload ===
-	if item.GetHttpRequest() == nil || item.GetJsonPayload() == nil {
-		return nil, nil
-	}
-
 	row := NewRequestsLog()
 
 	// === 2. Map common LogEntry fields ===
@@ -128,7 +115,14 @@ func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
 
 	// === 4. Map JsonPayload (for LB/Cloud Armor specific data) ===
 	jsonPayload := item.GetJsonPayload().AsMap()
-	row.BackendTargetProjectNumber = jsonPayload["backendTargetProjectNumber"].(string)
+	if jsonPayload == nil {
+		jsonPayload = make(map[string]interface{})
+	}
+
+	// Safely extract string fields with type checking
+	if v, ok := jsonPayload["backendTargetProjectNumber"].(string); ok {
+		row.BackendTargetProjectNumber = v
+	}
 	// Handle CacheDecision specifically:
 	if rawCacheDecision, ok := jsonPayload["cacheDecision"].([]interface{}); ok {
 		// Iterate over the []interface{} and append string elements to row.CacheDecision
@@ -233,28 +227,31 @@ func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
 		}
 	}
 
-	// === 6. Map HTTPRequest (guaranteed to be present due to early exit) ===
-	// No 'if' check needed here for item.GetHttpRequest() because we already filtered.
-	httpRequestPb := item.GetHttpRequest()
-	// Sanitize URLs to handle Unicode escape sequences that cause parsing errors
-	requestUrl := sanitizeURL(httpRequestPb.GetRequestUrl())
-	referer := sanitizeURL(httpRequestPb.GetReferer())
-	row.HttpRequest = &RequestLogHttpRequest{
-		RequestMethod:                  httpRequestPb.GetRequestMethod(),
-		RequestUrl:                     requestUrl,
-		RequestSize:                    httpRequestPb.GetRequestSize(),
-		Referer:                        referer,
-		UserAgent:                      httpRequestPb.GetUserAgent(),
-		Status:                         httpRequestPb.GetStatus(),
-		ResponseSize:                   httpRequestPb.GetResponseSize(),
-		RemoteIp:                       httpRequestPb.GetRemoteIp(),
-		Latency:                        httpRequestPb.GetLatency().String(), // Latency is a duration type in Protobuf
-		ServerIp:                       httpRequestPb.GetServerIp(),
-		Protocol:                       httpRequestPb.GetProtocol(),
-		CacheFillBytes:                 httpRequestPb.GetCacheFillBytes(),
-		CacheLookup:                    httpRequestPb.GetCacheLookup(),
-		CacheHit:                       httpRequestPb.GetCacheHit(),
-		CacheValidatedWithOriginServer: httpRequestPb.GetCacheValidatedWithOriginServer(),
+	// === 6. Map HTTPRequest ===
+	if item.GetHttpRequest() == nil {
+		row.HttpRequest = &RequestLogHttpRequest{}
+	} else {
+		httpRequestPb := item.GetHttpRequest()
+		// Sanitize URLs to handle Unicode escape sequences that cause parsing errors
+		requestUrl := sanitizeURL(httpRequestPb.GetRequestUrl())
+		referer := sanitizeURL(httpRequestPb.GetReferer())
+		row.HttpRequest = &RequestLogHttpRequest{
+			RequestMethod:                  httpRequestPb.GetRequestMethod(),
+			RequestUrl:                     requestUrl,
+			RequestSize:                    httpRequestPb.GetRequestSize(),
+			Referer:                        referer,
+			UserAgent:                      httpRequestPb.GetUserAgent(),
+			Status:                         httpRequestPb.GetStatus(),
+			ResponseSize:                   httpRequestPb.GetResponseSize(),
+			RemoteIp:                       httpRequestPb.GetRemoteIp(),
+			Latency:                        httpRequestPb.GetLatency().String(), // Latency is a duration type in Protobuf
+			ServerIp:                       httpRequestPb.GetServerIp(),
+			Protocol:                       httpRequestPb.GetProtocol(),
+			CacheFillBytes:                 httpRequestPb.GetCacheFillBytes(),
+			CacheLookup:                    httpRequestPb.GetCacheLookup(),
+			CacheHit:                       httpRequestPb.GetCacheHit(),
+			CacheValidatedWithOriginServer: httpRequestPb.GetCacheValidatedWithOriginServer(),
+		}
 	}
 
 	return row, nil
@@ -264,6 +261,18 @@ func mapFromBucketJson(itemBytes []byte) (*RequestsLog, error) {
 	var log requestsLog
 	if err := json.Unmarshal(itemBytes, &log); err != nil {
 		return nil, fmt.Errorf("failed to parse requests log JSON: %w", err)
+	}
+
+	// Filter by log name - only process requests logs
+	// Requests logs have log names like "projects/{project}/logs/requests"
+	if !strings.Contains(log.LogName, "/logs/requests") {
+		// Not a requests log, skip it
+		return nil, nil
+	}
+
+	// Early exit if missing required fields
+	if log.JsonPayload == nil {
+		return nil, nil
 	}
 
 	row := NewRequestsLog()
@@ -294,7 +303,7 @@ func mapFromBucketJson(itemBytes []byte) (*RequestsLog, error) {
 		}
 	}
 
-	// Map JSON Payload fields
+	// Map JSON Payload fields (JsonPayload is guaranteed to be non-nil here)
 	row.BackendTargetProjectNumber = log.JsonPayload.BackendTargetProjectNumber
 	row.CacheDecision = log.JsonPayload.CacheDecision
 	row.RemoteIp = log.JsonPayload.RemoteIp

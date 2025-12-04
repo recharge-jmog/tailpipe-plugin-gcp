@@ -54,12 +54,31 @@ func (c *RequestsLogTable) GetSourceMetadata() ([]*table.SourceMetadata[*Request
 }
 
 func (c *RequestsLogTable) EnrichRow(row *RequestsLog, sourceEnrichmentFields schema.SourceEnrichment) (*RequestsLog, error) {
+	if row == nil {
+		return nil, nil
+	}
+
 	row.CommonFields = sourceEnrichmentFields.CommonFields
 
 	row.TpID = xid.New().String()
-	row.TpTimestamp = row.Timestamp
 	row.TpIngestTimestamp = time.Now()
-	row.TpDate = row.Timestamp.Truncate(24 * time.Hour)
+
+	// Use Timestamp, fallback to ReceiveTimestamp, or current time if both are zero
+	timestamp := row.Timestamp
+	if timestamp.IsZero() {
+		timestamp = row.ReceiveTimestamp
+	}
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+	}
+
+	row.TpTimestamp = timestamp
+	row.TpDate = timestamp.Truncate(24 * time.Hour)
+
+	// Ensure TpIps is initialized before appending
+	if row.TpIps == nil {
+		row.TpIps = []string{}
+	}
 
 	if row.HttpRequest != nil {
 		if row.HttpRequest.RemoteIp != "" {
