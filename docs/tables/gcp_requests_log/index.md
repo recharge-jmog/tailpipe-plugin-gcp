@@ -34,7 +34,7 @@ connection "gcp" "logging_account" {
 }
 
 partition "gcp_requests_log" "my_logs" {
-  source "gcp_cloud_logging_api" {
+  source "gcp_logging_api" {
     connection = connection.gcp.logging_account
   }
 }
@@ -154,7 +154,7 @@ connection "gcp" "my_project" {
 }
 
 partition "gcp_requests_log" "my_logs" {
-  source "gcp_cloud_logging_api" {
+  source "gcp_logging_api" {
     connection = connection.gcp.my_project
   }
 }
@@ -169,7 +169,7 @@ Example: Collecting GCP Dataflow logs
 ```hcl
 partition "gcp_dataflow_log" "my_logs_prefix" {
   filter = "log_name like 'projects/my-project-name/logs/dataflow.googleapis.com%'"
-  source "gcp_cloud_logging_api" {
+  source "gcp_logging_api" {
     connection = connection.gcp.my_project
   }
 }

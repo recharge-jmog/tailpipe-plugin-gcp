@@ -6,7 +6,7 @@ import (
 	"github.com/rs/xid"
 
 	"github.com/turbot/pipe-fittings/v2/utils"
-	"github.com/turbot/tailpipe-plugin-gcp/sources/cloud_logging_api"
+	logging_log_entry "github.com/turbot/tailpipe-plugin-gcp/sources/logging_log_entry"
 	"github.com/turbot/tailpipe-plugin-gcp/sources/storage_bucket"
 	"github.com/turbot/tailpipe-plugin-sdk/artifact_source"
 	"github.com/turbot/tailpipe-plugin-sdk/artifact_source_config"
@@ -32,7 +32,7 @@ func (c *RequestsLogTable) GetSourceMetadata() ([]*table.SourceMetadata[*Request
 
 	return []*table.SourceMetadata[*RequestsLog]{
 		{
-			SourceName: cloud_logging_api.CloudLoggingAPISourceIdentifier,
+			SourceName: logging_log_entry.LoggingLogEntrySourceIdentifier,
 			Mapper:     &RequestsLogMapper{},
 		},
 		{
@@ -61,33 +61,34 @@ func (c *RequestsLogTable) EnrichRow(row *RequestsLog, sourceEnrichmentFields sc
 	row.CommonFields = sourceEnrichmentFields.CommonFields
 
 	row.TpID = xid.New().String()
-	row.TpTimestamp = row.Timestamp
 	row.TpIngestTimestamp = time.Now()
-	row.TpDate = row.Timestamp.Truncate(24 * time.Hour)
 
-	// Ensure TpIps is always initialized (even if empty)
+	// Use Timestamp, fallback to ReceiveTimestamp, or current time if both are zero
+	timestamp := row.Timestamp
+	if timestamp.IsZero() {
+		timestamp = row.ReceiveTimestamp
+	}
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+	}
+
+	row.TpTimestamp = timestamp
+	row.TpDate = timestamp.Truncate(24 * time.Hour)
+
+	// Ensure TpIps is initialized before appending
 	if row.TpIps == nil {
 		row.TpIps = []string{}
 	}
 
-	// Set TpDestinationIP and TpSourceIP to non-nil pointers, even if empty
-	emptyStr := ""
 	if row.HttpRequest != nil {
 		if row.HttpRequest.RemoteIp != "" {
 			row.TpIps = append(row.TpIps, row.HttpRequest.RemoteIp)
 			row.TpSourceIP = &row.HttpRequest.RemoteIp
-		} else {
-			row.TpSourceIP = &emptyStr
 		}
 		if row.HttpRequest.ServerIp != "" {
 			row.TpIps = append(row.TpIps, row.HttpRequest.ServerIp)
 			row.TpDestinationIP = &row.HttpRequest.ServerIp
-		} else {
-			row.TpDestinationIP = &emptyStr
 		}
-	} else {
-		row.TpDestinationIP = &emptyStr
-		row.TpSourceIP = &emptyStr
 	}
 
 	return row, nil

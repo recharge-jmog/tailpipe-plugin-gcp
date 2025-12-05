@@ -1,3 +1,27 @@
+## [TBD]
+
+_Breaking Changes_
+
+- **Source Renamed**: The source `gcp_logging_log_entry` has been renamed to `gcp_logging_api` to align with naming conventions used in other Tailpipe plugins (e.g., `azure_activity_log_api`, `pipes_audit_log_api`). The old identifier is deprecated but will continue to work with a deprecation warning. See the [deprecation guide](DEPRECATION_GUIDE.md) for migration instructions. ([#93](https://github.com/turbot/tailpipe-plugin-gcp/pull/93))
+
+_Enhancements_
+
+- Migrated GCP logging source from legacy `logadmin` client to modern GAPIC client (`apiv2`) for improved performance and features. ([#93](https://github.com/turbot/tailpipe-plugin-gcp/pull/93))
+- Added configurable retry mechanism with exponential backoff for GCP logging API calls. Retry parameters can be configured at the connection level: `min_retry_delay`, `max_retry_delay`, and `backoff_multiplier`. ([#93](https://github.com/turbot/tailpipe-plugin-gcp/pull/93))
+
+## v0.6.0 [2025-08-14]
+
+_What's new?_
+
+- New tables added: ([#80](https://github.com/turbot/tailpipe-plugin-gcp/pull/80))
+  - [gcp_billing_report](https://hub.tailpipe.io/plugins/turbot/gcp/tables/gcp_billing_report)
+
+## v0.5.2 [2025-07-28]
+
+_Dependencies_
+
+- Recompiled plugin with [tailpipe-plugin-sdk v0.9.2](https://github.com/turbot/tailpipe-plugin-sdk/blob/develop/CHANGELOG.md#v092-2025-07-24) that fixes incorrect data ranges for zero‑granularity collections and prevents crashes in certain collection states. ([#81](https://github.com/turbot/tailpipe-plugin-gcp/pull/81))
+
 ## v0.5.1 [2025-07-02]
 
 _Dependencies_

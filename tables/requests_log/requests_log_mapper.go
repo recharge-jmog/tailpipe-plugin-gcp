@@ -5,12 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
-	// for debugging
-
-	"cloud.google.com/go/logging"
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 
 	"github.com/turbot/tailpipe-plugin-sdk/mappers"
@@ -23,14 +22,67 @@ func (m *RequestsLogMapper) Identifier() string {
 	return "gcp_requests_log_mapper"
 }
 
+// flexibleInt64 can unmarshal from both string and int64 JSON values
+type flexibleInt64 int64
+
+func (f *flexibleInt64) UnmarshalJSON(data []byte) error {
+	// Handle null or empty string
+	if len(data) == 0 || string(data) == "null" || string(data) == `""` {
+		*f = 0
+		return nil
+	}
+
+	// Try to unmarshal as string first
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		// If it's an empty string, set to 0
+		if str == "" {
+			*f = 0
+			return nil
+		}
+		// If it's a string, parse it
+		val, err := strconv.ParseInt(str, 10, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse string as int64: %w", err)
+		}
+		*f = flexibleInt64(val)
+		return nil
+	}
+
+	// If not a string, try as int64
+	var val int64
+	if err := json.Unmarshal(data, &val); err != nil {
+		return fmt.Errorf("failed to unmarshal as int64 or string: %w", err)
+	}
+	*f = flexibleInt64(val)
+	return nil
+}
+
+// sanitizeURL converts Unicode escape sequences (e.g., %u002e) to their actual characters
+// to prevent URL parsing errors. This handles malformed URLs that contain Unicode escapes
+// instead of proper URL percent-encoding.
+func sanitizeURL(url string) string {
+	// Match Unicode escape sequences like %u002e, %u0041, etc.
+	re := regexp.MustCompile(`%u([0-9a-fA-F]{4})`)
+	return re.ReplaceAllStringFunc(url, func(match string) string {
+		// Extract the hex code (e.g., "002e" from "%u002e")
+		hexCode := match[2:6] // Skip "%u" prefix
+		code, err := strconv.ParseInt(hexCode, 16, 32)
+		if err != nil {
+			// If parsing fails, return the original match
+			return match
+		}
+		// Convert to Unicode character
+		return string(rune(code))
+	})
+}
+
 func (m *RequestsLogMapper) Map(_ context.Context, a any, _ ...mappers.MapOption[*RequestsLog]) (*RequestsLog, error) {
 	switch v := a.(type) {
 	case string:
 		return mapFromBucketJson([]byte(v))
 	case *loggingpb.LogEntry:
 		return mapFromSDKType(v)
-	case *logging.Entry:
-		return nil, fmt.Errorf("logging.Entry did not convert to *loggingpb.LogEntry: %T", a)
 	case []byte:
 		return mapFromBucketJson(v)
 	default:
@@ -39,7 +91,6 @@ func (m *RequestsLogMapper) Map(_ context.Context, a any, _ ...mappers.MapOption
 }
 
 func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
-
 	row := NewRequestsLog()
 
 	// === 2. Map common LogEntry fields ===
@@ -48,12 +99,14 @@ func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
 	row.InsertId = item.GetInsertId()
 	row.Severity = item.GetSeverity().String()
 	row.ReceiveTimestamp = item.GetReceiveTimestamp().AsTime()
-	row.Trace = item.GetTrace()
-	row.SpanId = item.GetSpanId()
-	row.TraceSampled = item.GetTraceSampled()
+	row.Trace = item.GetTrace()   // Access Trace directly using GetTrace()
+	row.SpanId = item.GetSpanId() // Access SpanID directly using GetSpanId()
+	// TraceSampled is often inferred from SpanID or Trace, or may be a specific field
+	row.TraceSampled = item.GetTraceSampled() // Assuming GetTraceSampled() exists for bool, else infer as before
 
 	// === 3. Map Resource ===
-	if item.GetResource() != nil {
+	// Access Resource fields using GetResource() and its Get* methods
+	if item.GetResource() != nil { // Check if resource object exists
 		row.Resource = &RequestLogResource{
 			Type:   item.GetResource().GetType(),
 			Labels: item.GetResource().GetLabels(),
@@ -70,7 +123,6 @@ func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
 	if v, ok := jsonPayload["backendTargetProjectNumber"].(string); ok {
 		row.BackendTargetProjectNumber = v
 	}
-
 	// Handle CacheDecision specifically:
 	if rawCacheDecision, ok := jsonPayload["cacheDecision"].([]interface{}); ok {
 		// Iterate over the []interface{} and append string elements to row.CacheDecision
@@ -159,30 +211,43 @@ func mapFromSDKType(item *loggingpb.LogEntry) (*RequestsLog, error) {
 				row.SecurityPolicyRequestData.RemoteIpInfo.RegionCode = v
 			}
 		}
+
+		// Handle recaptcha tokens
+		if recaptchaActionToken, ok := secPolicyData["recaptchaActionToken"].(map[string]interface{}); ok {
+			row.SecurityPolicyRequestData.RecaptchaActionToken = &RequestLogRecaptchaToken{}
+			if v, ok := recaptchaActionToken["score"].(float64); ok {
+				row.SecurityPolicyRequestData.RecaptchaActionToken.Score = v
+			}
+		}
+		if recaptchaSessionToken, ok := secPolicyData["recaptchaSessionToken"].(map[string]interface{}); ok {
+			row.SecurityPolicyRequestData.RecaptchaSessionToken = &RequestLogRecaptchaToken{}
+			if v, ok := recaptchaSessionToken["score"].(float64); ok {
+				row.SecurityPolicyRequestData.RecaptchaSessionToken.Score = v
+			}
+		}
 	}
 
+	// === 6. Map HTTPRequest ===
 	if item.GetHttpRequest() == nil {
 		row.HttpRequest = &RequestLogHttpRequest{}
 	} else {
 		httpRequestPb := item.GetHttpRequest()
+		// Sanitize URLs to handle Unicode escape sequences that cause parsing errors
+		requestUrl := sanitizeURL(httpRequestPb.GetRequestUrl())
+		referer := sanitizeURL(httpRequestPb.GetReferer())
 		row.HttpRequest = &RequestLogHttpRequest{
-			RequestMethod: httpRequestPb.GetRequestMethod(),
-			RequestUrl:    httpRequestPb.GetRequestUrl(),
-			RequestSize:   strconv.FormatInt(httpRequestPb.GetRequestSize(), 10),
-			Referer:       httpRequestPb.GetReferer(),
-			UserAgent:     httpRequestPb.GetUserAgent(),
-			Status:        httpRequestPb.GetStatus(),
-			ResponseSize:  strconv.FormatInt(httpRequestPb.GetResponseSize(), 10),
-			RemoteIp:      httpRequestPb.GetRemoteIp(),
-			Latency: func() string {
-				if lat := httpRequestPb.GetLatency(); lat != nil {
-					return lat.String()
-				}
-				return ""
-			}(),
+			RequestMethod:                  httpRequestPb.GetRequestMethod(),
+			RequestUrl:                     requestUrl,
+			RequestSize:                    httpRequestPb.GetRequestSize(),
+			Referer:                        referer,
+			UserAgent:                      httpRequestPb.GetUserAgent(),
+			Status:                         httpRequestPb.GetStatus(),
+			ResponseSize:                   httpRequestPb.GetResponseSize(),
+			RemoteIp:                       httpRequestPb.GetRemoteIp(),
+			Latency:                        httpRequestPb.GetLatency().String(), // Latency is a duration type in Protobuf
 			ServerIp:                       httpRequestPb.GetServerIp(),
 			Protocol:                       httpRequestPb.GetProtocol(),
-			CacheFillBytes:                 strconv.FormatInt(httpRequestPb.GetCacheFillBytes(), 10),
+			CacheFillBytes:                 httpRequestPb.GetCacheFillBytes(),
 			CacheLookup:                    httpRequestPb.GetCacheLookup(),
 			CacheHit:                       httpRequestPb.GetCacheHit(),
 			CacheValidatedWithOriginServer: httpRequestPb.GetCacheValidatedWithOriginServer(),
@@ -196,6 +261,18 @@ func mapFromBucketJson(itemBytes []byte) (*RequestsLog, error) {
 	var log requestsLog
 	if err := json.Unmarshal(itemBytes, &log); err != nil {
 		return nil, fmt.Errorf("failed to parse requests log JSON: %w", err)
+	}
+
+	// Filter by log name - only process requests logs
+	// Requests logs have log names like "projects/{project}/logs/requests"
+	if !strings.Contains(log.LogName, "/logs/requests") {
+		// Not a requests log, skip it
+		return nil, nil
+	}
+
+	// Early exit if missing required fields
+	if log.JsonPayload == nil {
+		return nil, nil
 	}
 
 	row := NewRequestsLog()
@@ -226,7 +303,7 @@ func mapFromBucketJson(itemBytes []byte) (*RequestsLog, error) {
 		}
 	}
 
-	// Map JSON Payload fields
+	// Map JSON Payload fields (JsonPayload is guaranteed to be non-nil here)
 	row.BackendTargetProjectNumber = log.JsonPayload.BackendTargetProjectNumber
 	row.CacheDecision = log.JsonPayload.CacheDecision
 	row.RemoteIp = log.JsonPayload.RemoteIp
@@ -295,24 +372,27 @@ func mapFromBucketJson(itemBytes []byte) (*RequestsLog, error) {
 		}
 	}
 
+	// Sanitize URLs to handle Unicode escape sequences that cause parsing errors
 	if log.HttpRequest == nil {
 		row.HttpRequest = &RequestLogHttpRequest{}
 	} else {
+		requestUrl := sanitizeURL(log.HttpRequest.RequestURL)
+		referer := sanitizeURL(log.HttpRequest.Referer)
 		row.HttpRequest = &RequestLogHttpRequest{
 			RequestMethod:                  log.HttpRequest.RequestMethod,
-			RequestUrl:                     log.HttpRequest.RequestURL,
-			RequestSize:                    log.HttpRequest.RequestSize,
+			RequestUrl:                     requestUrl,
+			RequestSize:                    int64(log.HttpRequest.RequestSize),
 			Status:                         log.HttpRequest.Status,
-			ResponseSize:                   log.HttpRequest.ResponseSize,
+			ResponseSize:                   int64(log.HttpRequest.ResponseSize),
 			UserAgent:                      log.HttpRequest.UserAgent,
 			RemoteIp:                       log.HttpRequest.RemoteIP,
 			ServerIp:                       log.HttpRequest.ServerIP,
-			Referer:                        log.HttpRequest.Referer,
+			Referer:                        referer,
 			Latency:                        log.HttpRequest.Latency,
 			CacheLookup:                    log.HttpRequest.CacheLookup,
 			CacheHit:                       log.HttpRequest.CacheHit,
 			CacheValidatedWithOriginServer: log.HttpRequest.CacheValidatedWithOriginServer,
-			CacheFillBytes:                 log.HttpRequest.CacheFillBytes,
+			CacheFillBytes:                 int64(log.HttpRequest.CacheFillBytes),
 		}
 	}
 
@@ -352,20 +432,20 @@ type jsonPayload struct {
 }
 
 type httpRequest struct {
-	RequestMethod                  string `json:"requestMethod"`
-	RequestURL                     string `json:"requestUrl"`
-	RequestSize                    string `json:"requestSize,omitempty"`
-	Status                         int32  `json:"status"`
-	ResponseSize                   string `json:"responseSize,omitempty"`
-	UserAgent                      string `json:"userAgent"`
-	RemoteIP                       string `json:"remoteIp"`
-	ServerIP                       string `json:"serverIp,omitempty"`
-	Referer                        string `json:"referer,omitempty"`
-	Latency                        string `json:"latency,omitempty"`
-	CacheLookup                    bool   `json:"cacheLookup,omitempty"`
-	CacheHit                       bool   `json:"cacheHit,omitempty"`
-	CacheValidatedWithOriginServer bool   `json:"cacheValidatedWithOriginServer,omitempty"`
-	CacheFillBytes                 string `json:"cacheFillBytes,omitempty"`
+	RequestMethod                  string        `json:"requestMethod"`
+	RequestURL                     string        `json:"requestUrl"`
+	RequestSize                    flexibleInt64 `json:"requestSize,omitempty"`
+	Status                         int32         `json:"status"`
+	ResponseSize                   flexibleInt64 `json:"responseSize,omitempty"`
+	UserAgent                      string        `json:"userAgent"`
+	RemoteIP                       string        `json:"remoteIp"`
+	ServerIP                       string        `json:"serverIp,omitempty"`
+	Referer                        string        `json:"referer,omitempty"`
+	Latency                        string        `json:"latency,omitempty"`
+	CacheLookup                    bool          `json:"cacheLookup,omitempty"`
+	CacheHit                       bool          `json:"cacheHit,omitempty"`
+	CacheValidatedWithOriginServer bool          `json:"cacheValidatedWithOriginServer,omitempty"`
+	CacheFillBytes                 flexibleInt64 `json:"cacheFillBytes,omitempty"`
 }
 
 type requestLogSecurityPolicy struct {
@@ -383,8 +463,6 @@ type requestLogSecurityPolicy struct {
 	MatchedOffset        int                           `json:"matchedOffset,omitempty"`
 	MatchedLength        int                           `json:"matchedLength,omitempty"`
 }
-
-// (No replacement lines; the block is removed entirely.)
 
 type requestLogSecurityPolicyRequestData struct {
 	RemoteIpInfo          *requestLogRemoteIpInfo   `json:"remoteIpInfo"`

@@ -49,10 +49,10 @@ type RequestLogResource struct {
 type RequestLogHttpRequest struct {
 	RequestMethod                  string `json:"request_method,omitempty"`
 	RequestUrl                     string `json:"request_url,omitempty"`
-	RequestSize                    string `json:"request_size,omitempty"`
+	RequestSize                    int64  `json:"request_size,omitempty"`
 	Referer                        string `json:"referer,omitempty"`
 	Status                         int32  `json:"status,omitempty"`
-	ResponseSize                   string `json:"response_size,omitempty"`
+	ResponseSize                   int64  `json:"response_size,omitempty"`
 	RemoteIp                       string `json:"remote_ip,omitempty"`
 	ServerIp                       string `json:"server_ip,omitempty"`
 	Latency                        string `json:"latency,omitempty"`
@@ -60,7 +60,7 @@ type RequestLogHttpRequest struct {
 	CacheHit                       bool   `json:"cache_hit,omitempty"`
 	CacheLookup                    bool   `json:"cache_lookup,omitempty"`
 	CacheValidatedWithOriginServer bool   `json:"cache_validated_with_origin_server,omitempty"`
-	CacheFillBytes                 string `json:"cache_fill_bytes,omitempty"`
+	CacheFillBytes                 int64  `json:"cache_fill_bytes,omitempty"`
 	UserAgent                      string `json:"user_agent,omitempty"`
 }
 
